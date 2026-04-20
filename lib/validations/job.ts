@@ -17,7 +17,11 @@ export const createJobSchema = z.object({
     .number()
     .positive("Budget must be greater than 0.")
     .max(100000000, "Budget is too large."),
-  categoryId: z.number().int().positive().nullable().optional(),
+  categoryId: z.number().int().positive("Category is required."),
+  skillIds: z
+    .array(z.number().int().positive("Invalid skill id."))
+    .min(1, "Select at least one skill.")
+    .max(20, "You can select up to 20 skills."),
 });
 
 export const jobsQuerySchema = z.object({

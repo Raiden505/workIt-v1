@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
 
 interface JobDetails {
   id: number;
+  client_id?: number | null;
+  client_name?: string | null;
+  client_avatar_url?: string | null;
   title: string;
   description: string;
   budget: number;
@@ -22,7 +25,9 @@ interface JobDetails {
 
 interface ProposalListItem {
   id: number;
+  freelancer_id: number | null;
   freelancer_name: string | null;
+  freelancer_avatar_url: string | null;
   bid_amount: number | null;
   status: "pending" | "accepted" | "rejected" | "withdrawn" | null;
   created_at: string;
@@ -168,14 +173,22 @@ export default function ClientJobProposalsPage() {
   };
 
   return (
-    <main className="min-h-screen p-4 md:p-6">
+    <main className="min-h-screen bg-gradient-to-b from-white via-emerald-50 to-white p-4 md:p-6">
       <div className="mx-auto w-full max-w-4xl space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Job Proposals</h1>
-            <p className="text-sm text-muted-foreground">Review and accept freelancer bids.</p>
+            <h1 className="text-2xl font-semibold text-black">Job Proposals</h1>
+            <p className="text-sm text-emerald-800">Review and accept freelancer bids.</p>
+            {job?.client_name ? (
+              <p className="text-sm text-black/80">
+                Client: <span className="font-medium">{job.client_name}</span>
+              </p>
+            ) : null}
           </div>
-          <Link href="/client" className={cn(buttonVariants({ variant: "outline" }))}>
+          <Link
+            href="/client"
+            className={cn(buttonVariants({ variant: "outline" }), "border-emerald-500 bg-white text-emerald-700")}
+          >
             Back to My Jobs
           </Link>
         </div>

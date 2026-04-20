@@ -8,11 +8,17 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BidForm } from "@/components/proposals/BidForm";
+import { UserAvatar } from "@/components/shared/UserAvatar";
 import { useSession } from "@/lib/hooks/useSession";
 import { cn, formatCurrency } from "@/lib/utils";
 
 interface JobDetail {
   id: number;
+  client_id: number | null;
+  client_name: string | null;
+  client_avatar_url?: string | null;
+  category_name: string | null;
+  skills: Array<{ id: number; name: string }>;
   title: string;
   description: string;
   budget: number;
@@ -97,14 +103,17 @@ export default function FreelancerJobDetailPage() {
       : undefined;
 
   return (
-    <main className="min-h-screen p-4 md:p-6">
+    <main className="min-h-screen bg-gradient-to-b from-white via-emerald-50 to-white p-4 md:p-6">
       <div className="mx-auto w-full max-w-4xl space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Job Details</h1>
-            <p className="text-sm text-muted-foreground">Review the job and submit your bid.</p>
+            <h1 className="text-2xl font-semibold text-black">Job Details</h1>
+            <p className="text-sm text-emerald-800">Review the job and submit your bid.</p>
           </div>
-          <Link href="/freelancer/jobs" className={cn(buttonVariants({ variant: "outline" }))}>
+          <Link
+            href="/freelancer/jobs"
+            className={cn(buttonVariants({ variant: "outline" }), "border-emerald-500 bg-white text-emerald-700")}
+          >
             Back to Jobs
           </Link>
         </div>
@@ -125,19 +134,45 @@ export default function FreelancerJobDetailPage() {
 
         {!isLoading && !errorMessage && job ? (
           <>
-            <Card>
+            <Card className="border-emerald-200 bg-white text-black shadow-sm">
               <CardHeader className="space-y-2">
                 <div className="flex items-start justify-between gap-3">
                   <CardTitle className="text-lg">{job.title}</CardTitle>
-                  <Badge variant={job.status === "open" ? "default" : "secondary"}>{job.status}</Badge>
+                  <Badge
+                    variant={job.status === "open" ? "default" : "secondary"}
+                    className={job.status === "open" ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-800"}
+                  >
+                    {job.status}
+                  </Badge>
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-emerald-700/80">
                   Posted on {new Date(job.created_at).toLocaleDateString()}
                 </p>
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-sm text-muted-foreground">{job.description}</p>
                 <p className="text-sm font-medium">Budget: {formatCurrency(job.budget)}</p>
+                {job.category_name ? <p className="text-sm">Category: {job.category_name}</p> : null}
+                {job.client_id ? (
+                  <div className="flex items-center gap-2 text-sm">
+                    <UserAvatar src={job.client_avatar_url} name={job.client_name} size="sm" />
+                    <p>
+                      Client:{" "}
+                      <Link href={`/clients/${job.client_id}`} className="text-emerald-700 hover:underline">
+                        {job.client_name ?? "Client"}
+                      </Link>
+                    </p>
+                  </div>
+                ) : null}
+                {job.skills.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {job.skills.map((skill) => (
+                      <Badge key={skill.id} variant="outline">
+                        {skill.name}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 

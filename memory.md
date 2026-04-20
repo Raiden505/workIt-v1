@@ -1,5 +1,5 @@
 # Project Memory — Freelance Marketplace MVP
-_Last updated: Phase 8 complete_
+_Last updated: Phase 9 complete_
 
 ## Stack
 - **Framework:** Next.js 16 (App Router), TypeScript
@@ -27,9 +27,10 @@ SUPABASE_SERVICE_ROLE_KEY=
 | 6 | Freelancer Flow (browse, bid, contracts) | ✅ complete |
 | 7 | Payment Simulation | ✅ complete |
 | 8 | Polish (errors/loading/empty states) | ✅ complete |
+| 9 | Feature Expansion (skills, profiles, statuses, reviews) | ✅ complete |
 
-**Current Phase:** Phase 8 — Polish — ✅ complete  
-**Gate:** All planned MVP phases are complete.
+**Current Phase:** Phase 9 — Feature Expansion — ✅ complete  
+**Gate:** Requested expansion delivered.
 
 ## Completed Tasks
 - [Phase 1] Project scaffolded, required dependencies installed, shadcn components added, Supabase helpers/store/types/env template created.
@@ -47,6 +48,15 @@ SUPABASE_SERVICE_ROLE_KEY=
 - [Phase 8] Added logout action in sidebar.
 - [Phase 8] Hardened duplicate proposal conflict handling (including DB conflict fallback to 409).
 - [Post-Phase 8] Fixed app font loading by correcting global CSS font token mapping to Geist variables.
+- [Phase 9 Planning] Added root-level implementation plan and technical design docs for skills, profile pages, profile links, status lifecycle hardening, and reviews.
+- [Phase 9] Linked jobs to mandatory category + skills (`job_skill`) and added skills catalog API.
+- [Phase 9] Added freelancer skill management (`/api/freelancer/skills`) and freelancer profile skill editor.
+- [Phase 9] Added profile edit pages (`/client/profile`, `/freelancer/profile`) backed by `/api/profile/me`.
+- [Phase 9] Added public profile pages (`/clients/[userId]`, `/freelancers/[userId]`) backed by `/api/profiles/[userId]`.
+- [Phase 9] Added deep links to profile pages from jobs, proposals, and contracts.
+- [Phase 9] Hardened status lifecycle: proposal withdraw, contract terminate, job completion on payment, contract review state visibility.
+- [Phase 9] Implemented review feature (`/api/reviews`) with write + read flows and contract-page review submission UI.
+- [Post-Phase 9] Updated linked-user rendering to prioritize names over IDs, added avatar rendering on profile/proposal/contract surfaces, applied white-green-black UI accents, and fixed freelancer-only default landing route.
 
 ## Files Created
 - `lib/supabase/client.ts` — browser Supabase client.
@@ -73,6 +83,20 @@ SUPABASE_SERVICE_ROLE_KEY=
 - `components/contracts/ContractCard.tsx` — shared contract card.
 - `app/api/**/route.ts` files for auth, roles, jobs, proposals, contracts, categories, transactions.
 - `app/auth/**`, `app/client/**`, `app/freelancer/**` pages/layouts for full MVP flows.
+- `Plan.md` — phased implementation plan for post-MVP feature expansion.
+- `TechDesign.md` — technical design for skills mapping, profile system, status transitions, and reviews.
+- `app/api/skills/route.ts` — skill options API.
+- `app/api/freelancer/skills/route.ts` — freelancer skill read/replace API.
+- `app/api/profile/me/route.ts` — authenticated profile read/update API.
+- `app/api/profiles/[userId]/route.ts` — public composed profile API with reviews.
+- `app/api/proposals/[id]/withdraw/route.ts` — proposal withdraw status transition.
+- `app/api/contracts/[id]/status/route.ts` — contract termination status transition.
+- `app/api/reviews/route.ts` — review create/read API.
+- `app/client/profile/page.tsx` and `app/freelancer/profile/page.tsx` — editable profile pages.
+- `app/clients/[userId]/page.tsx` and `app/freelancers/[userId]/page.tsx` — public profile views.
+- `components/reviews/ReviewForm.tsx` and `components/reviews/ReviewList.tsx` — review UI.
+- `components/shared/UserAvatar.tsx` — reusable avatar component with URL + initials fallback.
+- `lib/validations/profile.ts`, `lib/validations/skill.ts`, `lib/validations/review.ts`, `lib/validations/contract.ts` — new Zod schemas.
 
 ## Key Decisions
 - Auth is intentionally simulated (plain-text password compare for MVP only).
@@ -82,6 +106,10 @@ SUPABASE_SERVICE_ROLE_KEY=
 - User account can hold both roles; role checks guard role-specific actions.
 - API routes now consistently wrap logic in `try/catch` with typed JSON errors.
 - Duplicate proposal protection exists at pre-check and DB-conflict handling levels.
+- New feature-expansion design keeps existing tables and IDs; enhancements are wired through current schema (`job_skill`, `freelancer_skill`, `review`, `profile`, `client`, `freelancer`).
+- Job creation now enforces category + at least one skill for new jobs.
+- Profile discovery is now first-class navigation across marketplace entities (jobs, proposals, contracts).
+- Root route now resolves role-based default navigation so freelancer-only accounts land on `/freelancer`.
 
 ## DB Tables (existing schema)
 `users` → `profile` → `client` / `freelancer`  

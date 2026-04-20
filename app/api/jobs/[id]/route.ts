@@ -40,7 +40,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    if (!job) {
+    if (!job || job.client_id === null) {
       return NextResponse.json({ error: "Job not found." }, { status: 404 });
     }
 
@@ -60,7 +60,61 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       }
     }
 
-    return NextResponse.json({ job }, { status: 200 });
+    const [clientProfileResult, categoryResult, mappingResult] = await Promise.all([
+      supabaseServer
+        .from("profile")
+        .select("user_id, first_name, last_name, avatar_url")
+        .eq("user_id", job.client_id)
+        .maybeSingle(),
+      job.category_id === null
+        ? Promise.resolve({ data: null, error: null })
+        : supabaseServer.from("category").select("id, name").eq("id", job.category_id).maybeSingle(),
+      supabaseServer.from("job_skill").select("skill_id").eq("job_id", job.id),
+    ]);
+
+    if (clientProfileResult.error) {
+      return NextResponse.json({ error: clientProfileResult.error.message }, { status: 500 });
+    }
+    if (categoryResult.error) {
+      return NextResponse.json({ error: categoryResult.error.message }, { status: 500 });
+    }
+    if (mappingResult.error) {
+      return NextResponse.json({ error: mappingResult.error.message }, { status: 500 });
+    }
+
+    const skillIds = [...new Set(mappingResult.data.map((item) => item.skill_id))];
+    let skills: Array<{ id: number; name: string }> = [];
+
+    if (skillIds.length > 0) {
+      const { data: mappedSkills, error: mappedSkillsError } = await supabaseServer
+        .from("skill")
+        .select("id, name")
+        .in("id", skillIds)
+        .order("name", { ascending: true });
+
+      if (mappedSkillsError) {
+        return NextResponse.json({ error: mappedSkillsError.message }, { status: 500 });
+      }
+
+      skills = mappedSkills;
+    }
+
+    const clientName = clientProfileResult.data
+      ? `${clientProfileResult.data.first_name}${clientProfileResult.data.last_name ? ` ${clientProfileResult.data.last_name}` : ""}`
+      : null;
+
+    return NextResponse.json(
+      {
+        job: {
+          ...job,
+          category_name: categoryResult.data?.name ?? null,
+          client_name: clientName,
+          client_avatar_url: clientProfileResult.data?.avatar_url ?? null,
+          skills,
+        },
+      },
+      { status: 200 },
+    );
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }
@@ -115,6 +169,11 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
     if (existingContract) {
       return NextResponse.json({ error: "Cannot delete a job that already has a contract." }, { status: 409 });
+    }
+
+    const { error: deleteJobSkillsError } = await supabaseServer.from("job_skill").delete().eq("job_id", jobId);
+    if (deleteJobSkillsError) {
+      return NextResponse.json({ error: deleteJobSkillsError.message }, { status: 500 });
     }
 
     const { error: deleteProposalsError } = await supabaseServer.from("proposal").delete().eq("job_id", jobId);

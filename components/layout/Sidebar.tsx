@@ -35,6 +35,11 @@ const navByRole: Record<SidebarRole, NavItem[]> = {
       label: "Contracts",
       exact: true,
     },
+    {
+      href: "/client/profile",
+      label: "Profile",
+      exact: true,
+    },
   ],
   freelancer: [
     {
@@ -50,6 +55,11 @@ const navByRole: Record<SidebarRole, NavItem[]> = {
     {
       href: "/freelancer/contracts",
       label: "Contracts",
+      exact: true,
+    },
+    {
+      href: "/freelancer/profile",
+      label: "Profile",
       exact: true,
     },
   ],

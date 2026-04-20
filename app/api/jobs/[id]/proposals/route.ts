@@ -25,6 +25,7 @@ interface ProposalResponseItem {
   status: "pending" | "accepted" | "rejected" | "withdrawn" | null;
   created_at: string;
   freelancer_name: string | null;
+  freelancer_avatar_url: string | null;
 }
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -60,6 +61,16 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    const { data: clientProfile, error: clientProfileError } = await supabaseServer
+      .from("profile")
+      .select("first_name, last_name, avatar_url")
+      .eq("user_id", job.client_id)
+      .maybeSingle();
+
+    if (clientProfileError) {
+      return NextResponse.json({ error: clientProfileError.message }, { status: 500 });
+    }
+
     const { data: proposals, error: proposalsError } = await supabaseServer
       .from("proposal")
       .select("id, job_id, freelancer_id, bid_amount, status, created_at")
@@ -73,12 +84,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const freelancerIds = [
       ...new Set(proposals.map((item) => item.freelancer_id).filter((item): item is number => item !== null)),
     ];
-    let profileMap = new Map<number, string>();
+    let profileMap = new Map<number, { name: string; avatar_url: string | null }>();
 
     if (freelancerIds.length > 0) {
       const { data: profiles, error: profilesError } = await supabaseServer
         .from("profile")
-        .select("user_id, first_name, last_name")
+        .select("user_id, first_name, last_name, avatar_url")
         .in("user_id", freelancerIds);
 
       if (profilesError) {
@@ -88,7 +99,10 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       profileMap = new Map(
         profiles.map((profile) => [
           profile.user_id,
-          `${profile.first_name}${profile.last_name ? ` ${profile.last_name}` : ""}`,
+          {
+            name: `${profile.first_name}${profile.last_name ? ` ${profile.last_name}` : ""}`,
+            avatar_url: profile.avatar_url,
+          },
         ]),
       );
     }
@@ -96,10 +110,24 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const responseProposals: ProposalResponseItem[] = proposals.map((proposal) => ({
       ...proposal,
       freelancer_name:
-        proposal.freelancer_id === null ? null : profileMap.get(proposal.freelancer_id) ?? null,
+        proposal.freelancer_id === null ? null : profileMap.get(proposal.freelancer_id)?.name ?? null,
+      freelancer_avatar_url:
+        proposal.freelancer_id === null ? null : profileMap.get(proposal.freelancer_id)?.avatar_url ?? null,
     }));
 
-    return NextResponse.json({ job, proposals: responseProposals }, { status: 200 });
+    return NextResponse.json(
+      {
+        job: {
+          ...job,
+          client_name: clientProfile
+            ? `${clientProfile.first_name}${clientProfile.last_name ? ` ${clientProfile.last_name}` : ""}`
+            : null,
+          client_avatar_url: clientProfile?.avatar_url ?? null,
+        },
+        proposals: responseProposals,
+      },
+      { status: 200 },
+    );
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
-import type { TablesInsert } from "@/types/database";
 import { supabaseServer } from "@/lib/supabase/server";
 import { resolveApiErrorMessage } from "@/lib/api/error";
-
-const createTransactionSchema = z.object({
-  contractId: z.coerce.number().int().positive(),
-});
+import { contractIdParamsSchema, updateContractStatusSchema } from "@/lib/validations/contract";
 
 function getUserIdFromAuthHeader(request: Request): number | null {
   const token = request.headers.get("Authorization")?.replace("Bearer ", "").trim();
@@ -22,24 +17,30 @@ function getUserIdFromAuthHeader(request: Request): number | null {
   return userId;
 }
 
-export async function POST(request: Request) {
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const userId = getUserIdFromAuthHeader(request);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const params = await context.params;
+    const parsedParams = contractIdParamsSchema.safeParse(params);
+    if (!parsedParams.success) {
+      return NextResponse.json({ error: parsedParams.error.issues }, { status: 400 });
+    }
+
     const body: unknown = await request.json();
-    const parsedBody = createTransactionSchema.safeParse(body);
+    const parsedBody = updateContractStatusSchema.safeParse(body);
     if (!parsedBody.success) {
       return NextResponse.json({ error: parsedBody.error.issues }, { status: 400 });
     }
 
-    const contractId = parsedBody.data.contractId;
+    const contractId = parsedParams.data.id;
 
     const { data: contract, error: contractError } = await supabaseServer
       .from("contract")
-      .select("id, job_id, freelancer_id, total_price, status")
+      .select("id, job_id, freelancer_id, status")
       .eq("id", contractId)
       .maybeSingle();
 
@@ -51,13 +52,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Contract not found." }, { status: 404 });
     }
 
-    if (contract.status !== "active") {
-      return NextResponse.json({ error: "Only active contracts can be paid." }, { status: 409 });
-    }
-
     const { data: job, error: jobError } = await supabaseServer
       .from("job")
-      .select("id, client_id")
+      .select("id, client_id, status")
       .eq("id", contract.job_id)
       .maybeSingle();
 
@@ -65,80 +62,46 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: jobError.message }, { status: 500 });
     }
 
-    if (!job) {
+    if (!job || job.client_id === null) {
       return NextResponse.json({ error: "Job not found." }, { status: 404 });
     }
 
-    if (job.client_id !== userId) {
+    const canEditStatus = userId === contract.freelancer_id || userId === job.client_id;
+    if (!canEditStatus) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const { data: existingTransaction, error: existingTransactionError } = await supabaseServer
-      .from("transactions")
-      .select("id, status")
-      .eq("contract_id", contract.id)
-      .in("status", ["pending", "completed"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (existingTransactionError) {
-      return NextResponse.json({ error: existingTransactionError.message }, { status: 500 });
-    }
-
-    if (existingTransaction) {
-      return NextResponse.json({ error: "Payment already simulated for this contract." }, { status: 409 });
-    }
-
-    const payload: TablesInsert<"transactions"> = {
-      contract_id: contract.id,
-      amount: contract.total_price,
-      sender_id: userId,
-      receiver_id: contract.freelancer_id,
-      status: "completed",
-    };
-
-    const { data: transaction, error: createTransactionError } = await supabaseServer
-      .from("transactions")
-      .insert(payload)
-      .select("id, contract_id, sender_id, receiver_id, amount, status, created_at")
-      .single();
-
-    if (createTransactionError) {
-      return NextResponse.json({ error: createTransactionError.message }, { status: 500 });
+    if (contract.status !== "active") {
+      return NextResponse.json({ error: "Only active contracts can be terminated." }, { status: 409 });
     }
 
     const { data: updatedContract, error: updateContractError } = await supabaseServer
       .from("contract")
-      .update({ status: "completed" })
+      .update({ status: "terminated" })
       .eq("id", contract.id)
       .eq("status", "active")
       .select("id, status")
       .maybeSingle();
 
     if (updateContractError) {
-      await supabaseServer.from("transactions").delete().eq("id", transaction.id);
       return NextResponse.json({ error: updateContractError.message }, { status: 500 });
     }
 
     if (!updatedContract) {
-      await supabaseServer.from("transactions").delete().eq("id", transaction.id);
       return NextResponse.json({ error: "Contract is no longer active." }, { status: 409 });
     }
 
     const { error: updateJobError } = await supabaseServer
       .from("job")
-      .update({ status: "completed" })
-      .eq("id", contract.job_id)
+      .update({ status: "cancelled" })
+      .eq("id", job.id)
       .eq("status", "in_progress");
 
     if (updateJobError) {
-      await supabaseServer.from("contract").update({ status: "active" }).eq("id", contract.id);
-      await supabaseServer.from("transactions").delete().eq("id", transaction.id);
       return NextResponse.json({ error: updateJobError.message }, { status: 500 });
     }
 
-    return NextResponse.json({ transaction, contract: updatedContract }, { status: 201 });
+    return NextResponse.json({ contract: updatedContract }, { status: 200 });
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

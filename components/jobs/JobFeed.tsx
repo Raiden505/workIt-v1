@@ -6,12 +6,17 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { buttonVariants } from "@/components/ui/button";
+import { UserAvatar } from "@/components/shared/UserAvatar";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useSession } from "@/lib/hooks/useSession";
 
 interface JobFeedItem {
   id: number;
   client_id: number | null;
+  client_name: string | null;
+  client_avatar_url?: string | null;
+  category_name: string | null;
+  skills: Array<{ id: number; name: string }>;
   title: string;
   description: string;
   budget: number;
@@ -144,6 +149,27 @@ export function JobFeed() {
           <CardContent className="space-y-2">
             <p className="text-sm text-muted-foreground">{job.description}</p>
             <p className="text-sm font-medium">Budget: {formatCurrency(job.budget)}</p>
+            {job.category_name ? <p className="text-sm">Category: {job.category_name}</p> : null}
+            {job.client_id ? (
+              <p className="text-sm">
+                <span className="inline-flex items-center gap-2">
+                  <UserAvatar src={job.client_avatar_url} name={job.client_name} size="sm" />
+                  Client:{" "}
+                  <Link href={`/clients/${job.client_id}`} className="text-emerald-700 hover:underline">
+                    {job.client_name ?? "Client"}
+                  </Link>
+                </span>
+              </p>
+            ) : null}
+            {job.skills.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {job.skills.map((skill) => (
+                  <Badge key={skill.id} variant="outline">
+                    {skill.name}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
           </CardContent>
           <CardFooter>
             <Link
