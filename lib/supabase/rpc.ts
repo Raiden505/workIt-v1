@@ -71,8 +71,13 @@ type RpcInvoker = (
   options?: SupabaseRpcOptions,
 ) => PromiseLike<RawRpcResponse>;
 
-const rpcInvoker: RpcInvoker = (functionName, args, options) =>
-  supabaseServer.rpc(functionName, args, options) as PromiseLike<RawRpcResponse>;
+type LooseRpcClient = {
+  rpc: RpcInvoker;
+};
+
+const rpcClient = supabaseServer as unknown as LooseRpcClient;
+
+const rpcInvoker: RpcInvoker = (functionName, args, options) => rpcClient.rpc(functionName, args, options);
 
 function normalizeRpcArgs<TFunctionName extends RpcFunctionName>(
   args: RpcArgs<TFunctionName> | undefined,
