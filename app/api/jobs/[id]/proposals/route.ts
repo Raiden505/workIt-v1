@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 import { jobIdParamsSchema } from "@/lib/validations/job";
 
@@ -41,90 +41,27 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       return NextResponse.json({ error: parsedParams.error.issues }, { status: 400 });
     }
 
-    const jobId = parsedParams.data.id;
-
-    const { data: job, error: jobError } = await supabaseServer
-      .from("job")
-      .select("id, client_id, category_id, title, description, budget, status, created_at")
-      .eq("id", jobId)
-      .maybeSingle();
-
-    if (jobError) {
-      return NextResponse.json({ error: jobError.message }, { status: 500 });
+    const { data, error } = await callServerRpc("rpc_proposals_get_job_owner_view", {
+      p_user_id: userId,
+      p_job_id: parsedParams.data.id,
+    });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    if (!job) {
-      return NextResponse.json({ error: "Job not found." }, { status: 404 });
+    const rows = (data as Array<{ job: unknown; proposals: unknown }> | null) ?? [];
+    const payload = rows[0];
+    if (!payload) {
+      return NextResponse.json({ error: "Failed to fetch job proposals." }, { status: 500 });
     }
 
-    if (job.client_id !== userId) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    const { data: clientProfile, error: clientProfileError } = await supabaseServer
-      .from("profile")
-      .select("first_name, last_name, avatar_url")
-      .eq("user_id", job.client_id)
-      .maybeSingle();
-
-    if (clientProfileError) {
-      return NextResponse.json({ error: clientProfileError.message }, { status: 500 });
-    }
-
-    const { data: proposals, error: proposalsError } = await supabaseServer
-      .from("proposal")
-      .select("id, job_id, freelancer_id, bid_amount, status, created_at")
-      .eq("job_id", jobId)
-      .order("created_at", { ascending: true });
-
-    if (proposalsError) {
-      return NextResponse.json({ error: proposalsError.message }, { status: 500 });
-    }
-
-    const freelancerIds = [
-      ...new Set(proposals.map((item) => item.freelancer_id).filter((item): item is number => item !== null)),
-    ];
-    let profileMap = new Map<number, { name: string; avatar_url: string | null }>();
-
-    if (freelancerIds.length > 0) {
-      const { data: profiles, error: profilesError } = await supabaseServer
-        .from("profile")
-        .select("user_id, first_name, last_name, avatar_url")
-        .in("user_id", freelancerIds);
-
-      if (profilesError) {
-        return NextResponse.json({ error: profilesError.message }, { status: 500 });
-      }
-
-      profileMap = new Map(
-        profiles.map((profile) => [
-          profile.user_id,
-          {
-            name: `${profile.first_name}${profile.last_name ? ` ${profile.last_name}` : ""}`,
-            avatar_url: profile.avatar_url,
-          },
-        ]),
-      );
-    }
-
-    const responseProposals: ProposalResponseItem[] = proposals.map((proposal) => ({
-      ...proposal,
-      freelancer_name:
-        proposal.freelancer_id === null ? null : profileMap.get(proposal.freelancer_id)?.name ?? null,
-      freelancer_avatar_url:
-        proposal.freelancer_id === null ? null : profileMap.get(proposal.freelancer_id)?.avatar_url ?? null,
-    }));
+    const job = payload.job ?? null;
+    const proposals = (Array.isArray(payload.proposals) ? payload.proposals : []) as ProposalResponseItem[];
 
     return NextResponse.json(
       {
-        job: {
-          ...job,
-          client_name: clientProfile
-            ? `${clientProfile.first_name}${clientProfile.last_name ? ` ${clientProfile.last_name}` : ""}`
-            : null,
-          client_avatar_url: clientProfile?.avatar_url ?? null,
-        },
-        proposals: responseProposals,
+        job,
+        proposals,
       },
       { status: 200 },
     );

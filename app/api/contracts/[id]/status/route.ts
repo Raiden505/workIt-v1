@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 import { contractIdParamsSchema, updateContractStatusSchema } from "@/lib/validations/contract";
 
@@ -36,72 +36,32 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: parsedBody.error.issues }, { status: 400 });
     }
 
-    const contractId = parsedParams.data.id;
-
-    const { data: contract, error: contractError } = await supabaseServer
-      .from("contract")
-      .select("id, job_id, freelancer_id, status")
-      .eq("id", contractId)
-      .maybeSingle();
-
-    if (contractError) {
-      return NextResponse.json({ error: contractError.message }, { status: 500 });
+    const { data, error } = await callServerRpc("rpc_contracts_set_status", {
+      p_user_id: userId,
+      p_contract_id: parsedParams.data.id,
+      p_next_status: parsedBody.data.status,
+    });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    if (!contract || contract.job_id === null || contract.freelancer_id === null) {
-      return NextResponse.json({ error: "Contract not found." }, { status: 404 });
+    const rows = (data as Array<{
+      ok: boolean;
+      status_code: number;
+      message: string;
+      id: number | null;
+      status: "active" | "completed" | "terminated" | null;
+    }> | null) ?? [];
+    const result = rows[0];
+    if (!result) {
+      return NextResponse.json({ error: "Failed to update contract status." }, { status: 500 });
     }
 
-    const { data: job, error: jobError } = await supabaseServer
-      .from("job")
-      .select("id, client_id, status")
-      .eq("id", contract.job_id)
-      .maybeSingle();
-
-    if (jobError) {
-      return NextResponse.json({ error: jobError.message }, { status: 500 });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.message }, { status: result.status_code });
     }
 
-    if (!job || job.client_id === null) {
-      return NextResponse.json({ error: "Job not found." }, { status: 404 });
-    }
-
-    const canEditStatus = userId === contract.freelancer_id || userId === job.client_id;
-    if (!canEditStatus) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    if (contract.status !== "active") {
-      return NextResponse.json({ error: "Only active contracts can be terminated." }, { status: 409 });
-    }
-
-    const { data: updatedContract, error: updateContractError } = await supabaseServer
-      .from("contract")
-      .update({ status: "terminated" })
-      .eq("id", contract.id)
-      .eq("status", "active")
-      .select("id, status")
-      .maybeSingle();
-
-    if (updateContractError) {
-      return NextResponse.json({ error: updateContractError.message }, { status: 500 });
-    }
-
-    if (!updatedContract) {
-      return NextResponse.json({ error: "Contract is no longer active." }, { status: 409 });
-    }
-
-    const { error: updateJobError } = await supabaseServer
-      .from("job")
-      .update({ status: "cancelled" })
-      .eq("id", job.id)
-      .eq("status", "in_progress");
-
-    if (updateJobError) {
-      return NextResponse.json({ error: updateJobError.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ contract: updatedContract }, { status: 200 });
+    return NextResponse.json({ contract: { id: result.id, status: result.status } }, { status: 200 });
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

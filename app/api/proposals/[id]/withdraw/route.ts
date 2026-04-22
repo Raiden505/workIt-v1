@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 import { acceptProposalParamsSchema } from "@/lib/validations/job";
 
@@ -30,47 +30,32 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return NextResponse.json({ error: parsedParams.error.issues }, { status: 400 });
     }
 
-    const proposalId = parsedParams.data.id;
-
-    const { data: proposal, error: proposalError } = await supabaseServer
-      .from("proposal")
-      .select("id, freelancer_id, status")
-      .eq("id", proposalId)
-      .maybeSingle();
-
-    if (proposalError) {
-      return NextResponse.json({ error: proposalError.message }, { status: 500 });
+    const { data, error } = await callServerRpc("rpc_proposals_set_status", {
+      p_user_id: userId,
+      p_proposal_id: parsedParams.data.id,
+      p_next_status: "withdrawn",
+    });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    if (!proposal || proposal.freelancer_id === null) {
-      return NextResponse.json({ error: "Proposal not found." }, { status: 404 });
+    const rows = (data as Array<{
+      ok: boolean;
+      status_code: number;
+      message: string;
+      id: number | null;
+      status: "pending" | "accepted" | "rejected" | "withdrawn" | null;
+    }> | null) ?? [];
+    const result = rows[0];
+    if (!result) {
+      return NextResponse.json({ error: "Failed to update proposal status." }, { status: 500 });
     }
 
-    if (proposal.freelancer_id !== userId) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.message }, { status: result.status_code });
     }
 
-    if (proposal.status !== "pending") {
-      return NextResponse.json({ error: "Only pending proposals can be withdrawn." }, { status: 409 });
-    }
-
-    const { data: updatedProposal, error: updateError } = await supabaseServer
-      .from("proposal")
-      .update({ status: "withdrawn" })
-      .eq("id", proposal.id)
-      .eq("status", "pending")
-      .select("id, status")
-      .maybeSingle();
-
-    if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 500 });
-    }
-
-    if (!updatedProposal) {
-      return NextResponse.json({ error: "Proposal is no longer pending." }, { status: 409 });
-    }
-
-    return NextResponse.json({ proposal_id: proposal.id, status: "withdrawn" }, { status: 200 });
+    return NextResponse.json({ proposal_id: result.id, status: result.status }, { status: 200 });
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

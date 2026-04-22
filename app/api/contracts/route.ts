@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 
 const contractsQuerySchema = z.object({
@@ -43,74 +43,6 @@ interface ContractResponseItem {
   review_count: number;
 }
 
-async function fetchLatestTransactionStatusMap(contractIds: number[]): Promise<{
-  map: Map<number, "pending" | "completed" | "failed" | "refunded">;
-  error: string | null;
-}> {
-  if (contractIds.length === 0) {
-    return { map: new Map(), error: null };
-  }
-
-  const { data: transactions, error } = await supabaseServer
-    .from("transactions")
-    .select("contract_id, status, created_at")
-    .in("contract_id", contractIds)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    return { map: new Map(), error: error.message };
-  }
-
-  const statusMap = new Map<number, "pending" | "completed" | "failed" | "refunded">();
-  for (const transaction of transactions) {
-    if (transaction.contract_id === null || transaction.status === null) {
-      continue;
-    }
-
-    if (!statusMap.has(transaction.contract_id)) {
-      statusMap.set(transaction.contract_id, transaction.status);
-    }
-  }
-
-  return { map: statusMap, error: null };
-}
-
-async function fetchReviewMaps(contractIds: number[], currentUserId: number): Promise<{
-  reviewCountMap: Map<number, number>;
-  myReviewedSet: Set<number>;
-  error: string | null;
-}> {
-  if (contractIds.length === 0) {
-    return { reviewCountMap: new Map(), myReviewedSet: new Set(), error: null };
-  }
-
-  const { data: reviews, error } = await supabaseServer
-    .from("review")
-    .select("contract_id, reviewer_id")
-    .in("contract_id", contractIds);
-
-  if (error) {
-    return { reviewCountMap: new Map(), myReviewedSet: new Set(), error: error.message };
-  }
-
-  const reviewCountMap = new Map<number, number>();
-  const myReviewedSet = new Set<number>();
-
-  for (const review of reviews) {
-    if (review.contract_id === null) {
-      continue;
-    }
-
-    reviewCountMap.set(review.contract_id, (reviewCountMap.get(review.contract_id) ?? 0) + 1);
-
-    if (review.reviewer_id === currentUserId) {
-      myReviewedSet.add(review.contract_id);
-    }
-  }
-
-  return { reviewCountMap, myReviewedSet, error: null };
-}
-
 export async function GET(request: Request) {
   try {
     const userId = getUserIdFromAuthHeader(request);
@@ -128,217 +60,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: parsedQuery.error.issues }, { status: 400 });
     }
 
-    const view = parsedQuery.data.view ?? "client";
-    const status = parsedQuery.data.status;
-
-    if (view === "freelancer") {
-      const { data: freelancerRow, error: freelancerError } = await supabaseServer
-        .from("freelancer")
-        .select("user_id")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (freelancerError) {
-        return NextResponse.json({ error: freelancerError.message }, { status: 500 });
-      }
-
-      if (!freelancerRow) {
-        return NextResponse.json({ error: "Only freelancers can access freelancer contracts." }, { status: 403 });
-      }
-
-      let contractsQuery = supabaseServer
-        .from("contract")
-        .select("id, proposal_id, job_id, freelancer_id, total_price, status, start_date, end_date")
-        .eq("freelancer_id", userId)
-        .order("start_date", { ascending: false });
-
-      if (status) {
-        contractsQuery = contractsQuery.eq("status", status);
-      }
-
-      const { data: contracts, error: contractsError } = await contractsQuery;
-
-      if (contractsError) {
-        return NextResponse.json({ error: contractsError.message }, { status: 500 });
-      }
-
-      const usedJobIds = [
-        ...new Set(contracts.map((item) => item.job_id).filter((id): id is number => id !== null)),
-      ];
-      let jobTitleMap = new Map<number, string>();
-      let clientIdByJobId = new Map<number, number>();
-
-      if (usedJobIds.length > 0) {
-        const { data: jobs, error: jobsError } = await supabaseServer
-          .from("job")
-          .select("id, title, client_id")
-          .in("id", usedJobIds);
-
-        if (jobsError) {
-          return NextResponse.json({ error: jobsError.message }, { status: 500 });
-        }
-
-        jobTitleMap = new Map(jobs.map((job) => [job.id, job.title]));
-        clientIdByJobId = new Map(
-          jobs.filter((job) => job.client_id !== null).map((job) => [job.id, job.client_id as number]),
-        );
-      }
-
-      const usedClientIds = [...new Set([...clientIdByJobId.values()])];
-      let clientProfileMap = new Map<number, { name: string; avatar_url: string | null }>();
-
-      if (usedClientIds.length > 0) {
-        const { data: profiles, error: profilesError } = await supabaseServer
-          .from("profile")
-          .select("user_id, first_name, last_name, avatar_url")
-          .in("user_id", usedClientIds);
-
-        if (profilesError) {
-          return NextResponse.json({ error: profilesError.message }, { status: 500 });
-        }
-
-        clientProfileMap = new Map(
-          profiles.map((profile) => [
-            profile.user_id,
-            {
-              name: `${profile.first_name}${profile.last_name ? ` ${profile.last_name}` : ""}`,
-              avatar_url: profile.avatar_url,
-            },
-          ]),
-        );
-      }
-
-      const usedContractIds = contracts.map((contract) => contract.id);
-      const transactionStatusResult = await fetchLatestTransactionStatusMap(usedContractIds);
-      if (transactionStatusResult.error) {
-        return NextResponse.json({ error: transactionStatusResult.error }, { status: 500 });
-      }
-
-      const reviewResult = await fetchReviewMaps(usedContractIds, userId);
-      if (reviewResult.error) {
-        return NextResponse.json({ error: reviewResult.error }, { status: 500 });
-      }
-
-      const responseContracts: ContractResponseItem[] = contracts.map((contract) => {
-        const clientId = contract.job_id === null ? null : clientIdByJobId.get(contract.job_id) ?? null;
-
-        return {
-          ...contract,
-          client_id: clientId,
-          job_title: contract.job_id === null ? null : jobTitleMap.get(contract.job_id) ?? null,
-          freelancer_name: null,
-          client_name: clientId === null ? null : clientProfileMap.get(clientId)?.name ?? null,
-          freelancer_avatar_url: null,
-          client_avatar_url: clientId === null ? null : clientProfileMap.get(clientId)?.avatar_url ?? null,
-          transaction_status: transactionStatusResult.map.get(contract.id) ?? null,
-          counterparty_user_id: clientId,
-          my_reviewed: reviewResult.myReviewedSet.has(contract.id),
-          review_count: reviewResult.reviewCountMap.get(contract.id) ?? 0,
-        };
-      });
-
-      return NextResponse.json({ contracts: responseContracts }, { status: 200 });
+    const { data, error } = await callServerRpc("rpc_contracts_list_for_user", {
+      p_user_id: userId,
+      p_view: parsedQuery.data.view ?? "client",
+      p_status: parsedQuery.data.status ?? null,
+    });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    const { data: jobsOwnedByClient, error: jobsOwnedByClientError } = await supabaseServer
-      .from("job")
-      .select("id")
-      .eq("client_id", userId);
-
-    if (jobsOwnedByClientError) {
-      return NextResponse.json({ error: jobsOwnedByClientError.message }, { status: 500 });
-    }
-
-    const jobIds = jobsOwnedByClient.map((job) => job.id);
-    if (jobIds.length === 0) {
-      return NextResponse.json({ contracts: [] }, { status: 200 });
-    }
-
-    let contractsQuery = supabaseServer
-      .from("contract")
-      .select("id, proposal_id, job_id, freelancer_id, total_price, status, start_date, end_date")
-      .in("job_id", jobIds)
-      .order("start_date", { ascending: false });
-
-    if (status) {
-      contractsQuery = contractsQuery.eq("status", status);
-    }
-
-    const { data: contracts, error: contractsError } = await contractsQuery;
-
-    if (contractsError) {
-      return NextResponse.json({ error: contractsError.message }, { status: 500 });
-    }
-
-    const usedJobIds = [...new Set(contracts.map((item) => item.job_id).filter((id): id is number => id !== null))];
-    const usedFreelancerIds = [
-      ...new Set(contracts.map((item) => item.freelancer_id).filter((id): id is number => id !== null)),
-    ];
-
-    let jobTitleMap = new Map<number, string>();
-    if (usedJobIds.length > 0) {
-      const { data: jobs, error: jobsError } = await supabaseServer
-        .from("job")
-        .select("id, title")
-        .in("id", usedJobIds);
-
-      if (jobsError) {
-        return NextResponse.json({ error: jobsError.message }, { status: 500 });
-      }
-
-      jobTitleMap = new Map(jobs.map((job) => [job.id, job.title]));
-    }
-
-    let freelancerProfileMap = new Map<number, { name: string; avatar_url: string | null }>();
-    if (usedFreelancerIds.length > 0) {
-      const { data: profiles, error: profilesError } = await supabaseServer
-        .from("profile")
-        .select("user_id, first_name, last_name, avatar_url")
-        .in("user_id", usedFreelancerIds);
-
-      if (profilesError) {
-        return NextResponse.json({ error: profilesError.message }, { status: 500 });
-      }
-
-      freelancerProfileMap = new Map(
-        profiles.map((profile) => [
-          profile.user_id,
-          {
-            name: `${profile.first_name}${profile.last_name ? ` ${profile.last_name}` : ""}`,
-            avatar_url: profile.avatar_url,
-          },
-        ]),
-      );
-    }
-
-    const usedContractIds = contracts.map((contract) => contract.id);
-    const transactionStatusResult = await fetchLatestTransactionStatusMap(usedContractIds);
-    if (transactionStatusResult.error) {
-      return NextResponse.json({ error: transactionStatusResult.error }, { status: 500 });
-    }
-
-    const reviewResult = await fetchReviewMaps(usedContractIds, userId);
-    if (reviewResult.error) {
-      return NextResponse.json({ error: reviewResult.error }, { status: 500 });
-    }
-
-    const responseContracts: ContractResponseItem[] = contracts.map((contract) => ({
-      ...contract,
-      client_id: userId,
-      job_title: contract.job_id === null ? null : jobTitleMap.get(contract.job_id) ?? null,
-      freelancer_name:
-        contract.freelancer_id === null ? null : freelancerProfileMap.get(contract.freelancer_id)?.name ?? null,
-      client_name: null,
-      freelancer_avatar_url:
-        contract.freelancer_id === null ? null : freelancerProfileMap.get(contract.freelancer_id)?.avatar_url ?? null,
-      client_avatar_url: null,
-      transaction_status: transactionStatusResult.map.get(contract.id) ?? null,
-      counterparty_user_id: contract.freelancer_id,
-      my_reviewed: reviewResult.myReviewedSet.has(contract.id),
-      review_count: reviewResult.reviewCountMap.get(contract.id) ?? 0,
-    }));
-
-    return NextResponse.json({ contracts: responseContracts }, { status: 200 });
+    return NextResponse.json({ contracts: (data ?? []) as ContractResponseItem[] }, { status: 200 });
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

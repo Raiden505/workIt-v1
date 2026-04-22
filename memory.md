@@ -1,5 +1,5 @@
 # Project Memory — Freelance Marketplace MVP
-_Last updated: Phase 9 complete_
+_Last updated: RPC route migration complete_
 
 ## Stack
 - **Framework:** Next.js 16 (App Router), TypeScript
@@ -57,10 +57,17 @@ SUPABASE_SERVICE_ROLE_KEY=
 - [Phase 9] Hardened status lifecycle: proposal withdraw, contract terminate, job completion on payment, contract review state visibility.
 - [Phase 9] Implemented review feature (`/api/reviews`) with write + read flows and contract-page review submission UI.
 - [Post-Phase 9] Updated linked-user rendering to prioritize names over IDs, added avatar rendering on profile/proposal/contract surfaces, applied white-green-black UI accents, and fixed freelancer-only default landing route.
+- [Post-Phase 9] Added SQL RPC query scaffolding with canonical domain SQL under `queries/` and mirrored executable migration under `supabase/migrations/`.
+- [Maintenance] Added RPC read-model coverage for categories list, authenticated skills list, job owner proposal composite view, and review summary reads; mirrored definitions in migration SQL.
+- [Maintenance] Added reusable server RPC helper (`lib/supabase/rpc.ts`) to standardize `supabaseServer.rpc(...)` calls, typing, and API-ready error status mapping.
+- [Maintenance] Hardened auth/role RPCs with conflict-safe signup insert flow, explicit login lookup contract, and idempotent client/freelancer activation behavior.
+- [Maintenance] Added explicit mutation-result RPC contracts (status code/result code/message + payload) for proposal, contract, transaction, skills, profile update, and job delete flows with atomic multi-step lifecycle updates.
+- [Maintenance] Migrated all `app/api/**/route.ts` data access from Supabase query-builder (`.from`) to RPC calls through `lib/supabase/rpc.ts`, preserving existing endpoint response contracts and status semantics.
 
 ## Files Created
 - `lib/supabase/client.ts` — browser Supabase client.
 - `lib/supabase/server.ts` — server Supabase client.
+- `lib/supabase/rpc.ts` — reusable typed server RPC helper with mapped error status metadata.
 - `store/session.ts` — session state store.
 - `types/index.ts` — app-level domain/session types.
 - `lib/validations/auth.ts` — auth schemas.
@@ -97,6 +104,17 @@ SUPABASE_SERVICE_ROLE_KEY=
 - `components/reviews/ReviewForm.tsx` and `components/reviews/ReviewList.tsx` — review UI.
 - `components/shared/UserAvatar.tsx` — reusable avatar component with URL + initials fallback.
 - `lib/validations/profile.ts`, `lib/validations/skill.ts`, `lib/validations/review.ts`, `lib/validations/contract.ts` — new Zod schemas.
+- `queries/auth.sql` — auth RPCs and shared role/user helper RPCs.
+- `queries/categories.sql` — category catalog read RPCs.
+- `queries/roles.sql` — role discovery and activation RPCs.
+- `queries/jobs.sql` — job create/list/detail/delete RPCs with skill aggregation.
+- `queries/proposals.sql` — proposal create/list/status-transition RPCs.
+- `queries/contracts.sql` — proposal acceptance, contract status, and contract listing RPCs.
+- `queries/transactions.sql` — payment simulation and latest transaction status RPCs.
+- `queries/profiles.sql` — profile read/update/public payload RPCs.
+- `queries/reviews.sql` — review list/create RPCs with contract ownership checks.
+- `queries/skills.sql` — skills catalog and freelancer skill replacement RPCs.
+- `supabase/migrations/202604220001_rpc_query_library.sql` — executable migration mirroring canonical `queries/*.sql` RPC definitions.
 
 ## Key Decisions
 - Auth is intentionally simulated (plain-text password compare for MVP only).
@@ -110,6 +128,11 @@ SUPABASE_SERVICE_ROLE_KEY=
 - Job creation now enforces category + at least one skill for new jobs.
 - Profile discovery is now first-class navigation across marketplace entities (jobs, proposals, contracts).
 - Root route now resolves role-based default navigation so freelancer-only accounts land on `/freelancer`.
+- RPC SQL source of truth now lives in root `queries/*.sql`, with Supabase-executable copies maintained in `supabase/migrations/`.
+- Auth/role RPC activation now preserves existing profile role data on repeated calls (`ON CONFLICT DO NOTHING`) to match idempotent activation semantics.
+- Mutation-heavy RPC surfaces now return explicit deterministic result contracts for route-level status mapping (`ok`, `status_code`, `result_code`, `message`) while keeping accept/terminate/payment/delete lifecycle writes transaction-safe in SQL.
+- Read-model RPC coverage now includes endpoint-aligned category and review summary reads plus an owner-scoped proposals payload projection for future route RPC migration.
+- API route database access is now centralized through RPC invocations; no runtime `supabaseServer.from(...)` calls remain in `app/api`.
 
 ## DB Tables (existing schema)
 `users` → `profile` → `client` / `freelancer`  

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import type { TablesInsert } from "@/types/database";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 import { createProposalSchema } from "@/lib/validations/proposal";
 
@@ -31,78 +30,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: parsedBody.error.issues }, { status: 400 });
     }
 
-    const { data: freelancerRow, error: freelancerError } = await supabaseServer
-      .from("freelancer")
-      .select("user_id")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (freelancerError) {
-      return NextResponse.json({ error: freelancerError.message }, { status: 500 });
+    const { data, error } = await callServerRpc("rpc_proposals_create", {
+      p_user_id: userId,
+      p_job_id: parsedBody.data.jobId,
+      p_bid_amount: parsedBody.data.bidAmount,
+    });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    if (!freelancerRow) {
-      return NextResponse.json({ error: "Only freelancers can submit proposals." }, { status: 403 });
+    const rows = (data as Array<{
+      ok: boolean;
+      status_code: number;
+      message: string;
+      id: number | null;
+      job_id: number | null;
+      freelancer_id: number | null;
+      bid_amount: number | null;
+      status: "pending" | "accepted" | "rejected" | "withdrawn" | null;
+      created_at: string | null;
+    }> | null) ?? [];
+    const result = rows[0];
+    if (!result) {
+      return NextResponse.json({ error: "Failed to create proposal." }, { status: 500 });
     }
 
-    const { data: job, error: jobError } = await supabaseServer
-      .from("job")
-      .select("id, client_id, status")
-      .eq("id", parsedBody.data.jobId)
-      .maybeSingle();
-
-    if (jobError) {
-      return NextResponse.json({ error: jobError.message }, { status: 500 });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.message }, { status: result.status_code });
     }
 
-    if (!job) {
-      return NextResponse.json({ error: "Job not found." }, { status: 404 });
-    }
-
-    if (job.client_id === userId) {
-      return NextResponse.json({ error: "You cannot bid on your own job." }, { status: 403 });
-    }
-
-    if (job.status !== "open") {
-      return NextResponse.json({ error: "This job is not open for bidding." }, { status: 409 });
-    }
-
-    const { data: existingProposal, error: existingProposalError } = await supabaseServer
-      .from("proposal")
-      .select("id")
-      .eq("job_id", parsedBody.data.jobId)
-      .eq("freelancer_id", userId)
-      .maybeSingle();
-
-    if (existingProposalError) {
-      return NextResponse.json({ error: existingProposalError.message }, { status: 500 });
-    }
-
-    if (existingProposal) {
-      return NextResponse.json({ error: "You have already submitted a proposal for this job." }, { status: 409 });
-    }
-
-    const payload: TablesInsert<"proposal"> = {
-      job_id: parsedBody.data.jobId,
-      freelancer_id: userId,
-      bid_amount: parsedBody.data.bidAmount,
-      status: "pending",
-    };
-
-    const { data: proposal, error: createProposalError } = await supabaseServer
-      .from("proposal")
-      .insert(payload)
-      .select("id, job_id, freelancer_id, bid_amount, status, created_at")
-      .single();
-
-    if (createProposalError) {
-      if (createProposalError.code === "23505") {
-        return NextResponse.json({ error: "You have already submitted a proposal for this job." }, { status: 409 });
-      }
-      return NextResponse.json({ error: createProposalError.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ proposal }, { status: 201 });
+    return NextResponse.json(
+      {
+        proposal: {
+          id: result.id,
+          job_id: result.job_id,
+          freelancer_id: result.freelancer_id,
+          bid_amount: result.bid_amount,
+          status: result.status,
+          created_at: result.created_at,
+        },
+      },
+      { status: 201 },
+    );
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

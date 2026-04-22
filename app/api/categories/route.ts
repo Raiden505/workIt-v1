@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 
 function getUserIdFromAuthHeader(request: Request): number | null {
@@ -23,16 +23,12 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { data: categories, error } = await supabaseServer
-      .from("category")
-      .select("id, name")
-      .order("name", { ascending: true });
-
+    const { data, error } = await callServerRpc("rpc_categories_list", { p_user_id: userId });
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    return NextResponse.json({ categories }, { status: 200 });
+    return NextResponse.json({ categories: data ?? [] }, { status: 200 });
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }

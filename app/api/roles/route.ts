@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
-import type { TablesInsert } from "@/types/database";
 
 const createRoleSchema = z.object({
   role: z.enum(["client", "freelancer"]),
@@ -31,26 +30,22 @@ function getUserIdFromAuthHeader(request: Request): number | null {
 async function fetchRolesForUser(userId: number): Promise<{
   data: RolesPayload | null;
   error: string | null;
+  status: number;
 }> {
-  const [clientResult, freelancerResult] = await Promise.all([
-    supabaseServer.from("client").select("user_id").eq("user_id", userId).maybeSingle(),
-    supabaseServer.from("freelancer").select("user_id").eq("user_id", userId).maybeSingle(),
-  ]);
-
-  if (clientResult.error) {
-    return { data: null, error: clientResult.error.message };
+  const { data, error } = await callServerRpc("rpc_roles_get", { p_user_id: userId });
+  if (error) {
+    return { data: null, error: error.message, status: error.status };
   }
 
-  if (freelancerResult.error) {
-    return { data: null, error: freelancerResult.error.message };
-  }
-
+  const rows = (data as Array<{ client_id: number | null; freelancer_id: number | null }> | null) ?? [];
+  const row = rows[0];
   return {
     data: {
-      client_id: clientResult.data?.user_id ?? null,
-      freelancer_id: freelancerResult.data?.user_id ?? null,
+      client_id: row?.client_id ?? null,
+      freelancer_id: row?.freelancer_id ?? null,
     },
     error: null,
+    status: 200,
   };
 }
 
@@ -63,7 +58,7 @@ export async function GET(request: Request) {
 
     const rolesResult = await fetchRolesForUser(userId);
     if (rolesResult.error || !rolesResult.data) {
-      return NextResponse.json({ error: rolesResult.error ?? "Failed to fetch roles." }, { status: 500 });
+      return NextResponse.json({ error: rolesResult.error ?? "Failed to fetch roles." }, { status: rolesResult.status });
     }
 
     return NextResponse.json(rolesResult.data, { status: 200 });
@@ -86,50 +81,26 @@ export async function POST(request: Request) {
     }
 
     if (parsed.data.role === "client") {
-      const { data: existingClient, error: existingClientError } = await supabaseServer
-        .from("client")
-        .select("user_id")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (existingClientError) {
-        return NextResponse.json({ error: existingClientError.message }, { status: 500 });
-      }
-
-      if (!existingClient) {
-        const payload: TablesInsert<"client"> = { user_id: userId };
-        const { error: createClientError } = await supabaseServer.from("client").insert(payload);
-
-        if (createClientError) {
-          return NextResponse.json({ error: createClientError.message }, { status: 500 });
-        }
+      const { error } = await callServerRpc("rpc_roles_activate_client", {
+        p_user_id: userId,
+      });
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: error.status });
       }
     }
 
     if (parsed.data.role === "freelancer") {
-      const { data: existingFreelancer, error: existingFreelancerError } = await supabaseServer
-        .from("freelancer")
-        .select("user_id")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (existingFreelancerError) {
-        return NextResponse.json({ error: existingFreelancerError.message }, { status: 500 });
-      }
-
-      if (!existingFreelancer) {
-        const payload: TablesInsert<"freelancer"> = { user_id: userId };
-        const { error: createFreelancerError } = await supabaseServer.from("freelancer").insert(payload);
-
-        if (createFreelancerError) {
-          return NextResponse.json({ error: createFreelancerError.message }, { status: 500 });
-        }
+      const { error } = await callServerRpc("rpc_roles_activate_freelancer", {
+        p_user_id: userId,
+      });
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: error.status });
       }
     }
 
     const rolesResult = await fetchRolesForUser(userId);
     if (rolesResult.error || !rolesResult.data) {
-      return NextResponse.json({ error: rolesResult.error ?? "Failed to fetch roles." }, { status: 500 });
+      return NextResponse.json({ error: rolesResult.error ?? "Failed to fetch roles." }, { status: rolesResult.status });
     }
 
     return NextResponse.json(rolesResult.data, { status: 200 });

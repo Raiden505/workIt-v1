@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import type { TablesInsert } from "@/types/database";
-import { supabaseServer } from "@/lib/supabase/server";
+import { callServerRpc } from "@/lib/supabase/rpc";
 import { resolveApiErrorMessage } from "@/lib/api/error";
 import { skillIdsSchema } from "@/lib/validations/skill";
 
@@ -18,50 +17,29 @@ function getUserIdFromAuthHeader(request: Request): number | null {
   return userId;
 }
 
-async function ensureFreelancer(userId: number): Promise<{ ok: boolean; error?: string }> {
-  const { data: freelancer, error } = await supabaseServer
-    .from("freelancer")
-    .select("user_id")
-    .eq("user_id", userId)
-    .maybeSingle();
-
+async function ensureFreelancer(userId: number): Promise<{ ok: boolean; error?: string; status?: number }> {
+  const { data, error } = await callServerRpc("rpc_roles_get", { p_user_id: userId });
   if (error) {
-    return { ok: false, error: error.message };
+    return { ok: false, error: error.message, status: error.status };
   }
 
-  if (!freelancer) {
-    return { ok: false, error: "Only freelancers can manage skills." };
+  const rows = (data as Array<{ freelancer_id: number | null }> | null) ?? [];
+  const roles = rows[0];
+  if (!roles?.freelancer_id) {
+    return { ok: false, error: "Only freelancers can manage skills.", status: 403 };
   }
 
   return { ok: true };
 }
 
 async function fetchFreelancerSkills(userId: number) {
-  const { data: mappings, error: mappingsError } = await supabaseServer
-    .from("freelancer_skill")
-    .select("skill_id")
-    .eq("freelancer_id", userId);
-
-  if (mappingsError) {
-    return { error: mappingsError.message, skills: [], skillIds: [] as number[] };
+  const { data, error } = await callServerRpc("rpc_skills_list_for_freelancer", { p_freelancer_id: userId });
+  if (error) {
+    return { error: error.message, status: error.status, skills: [] as Array<{ id: number; name: string }> };
   }
 
-  const skillIds = [...new Set(mappings.map((item) => item.skill_id))];
-  if (skillIds.length === 0) {
-    return { error: null, skills: [] as Array<{ id: number; name: string }>, skillIds };
-  }
-
-  const { data: skills, error: skillsError } = await supabaseServer
-    .from("skill")
-    .select("id, name")
-    .in("id", skillIds)
-    .order("name", { ascending: true });
-
-  if (skillsError) {
-    return { error: skillsError.message, skills: [], skillIds };
-  }
-
-  return { error: null, skills, skillIds };
+  const skills = (data as Array<{ id: number; name: string }> | null) ?? [];
+  return { error: null, status: 200, skills };
 }
 
 export async function GET(request: Request) {
@@ -73,16 +51,21 @@ export async function GET(request: Request) {
 
     const freelancerCheck = await ensureFreelancer(userId);
     if (!freelancerCheck.ok) {
-      const status = freelancerCheck.error === "Only freelancers can manage skills." ? 403 : 500;
-      return NextResponse.json({ error: freelancerCheck.error }, { status });
+      return NextResponse.json({ error: freelancerCheck.error }, { status: freelancerCheck.status ?? 500 });
     }
 
     const result = await fetchFreelancerSkills(userId);
     if (result.error) {
-      return NextResponse.json({ error: result.error }, { status: 500 });
+      return NextResponse.json({ error: result.error }, { status: result.status });
     }
 
-    return NextResponse.json({ skills: result.skills, skillIds: result.skillIds }, { status: 200 });
+    return NextResponse.json(
+      {
+        skills: result.skills,
+        skillIds: result.skills.map((skill) => skill.id),
+      },
+      { status: 200 },
+    );
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }
@@ -97,8 +80,7 @@ export async function PUT(request: Request) {
 
     const freelancerCheck = await ensureFreelancer(userId);
     if (!freelancerCheck.ok) {
-      const status = freelancerCheck.error === "Only freelancers can manage skills." ? 403 : 500;
-      return NextResponse.json({ error: freelancerCheck.error }, { status });
+      return NextResponse.json({ error: freelancerCheck.error }, { status: freelancerCheck.status ?? 500 });
     }
 
     const body: unknown = await request.json();
@@ -107,50 +89,34 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: parsedBody.error.issues }, { status: 400 });
     }
 
-    const dedupedSkillIds = [...new Set(parsedBody.data.skillIds)];
-
-    if (dedupedSkillIds.length > 0) {
-      const { data: existingSkills, error: skillsError } = await supabaseServer
-        .from("skill")
-        .select("id")
-        .in("id", dedupedSkillIds);
-
-      if (skillsError) {
-        return NextResponse.json({ error: skillsError.message }, { status: 500 });
-      }
-
-      if (existingSkills.length !== dedupedSkillIds.length) {
-        return NextResponse.json({ error: "One or more skills are invalid." }, { status: 400 });
-      }
+    const { data, error } = await callServerRpc("rpc_skills_replace_for_freelancer", {
+      p_user_id: userId,
+      p_skill_ids: parsedBody.data.skillIds,
+    });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
 
-    const { error: deleteError } = await supabaseServer
-      .from("freelancer_skill")
-      .delete()
-      .eq("freelancer_id", userId);
-
-    if (deleteError) {
-      return NextResponse.json({ error: deleteError.message }, { status: 500 });
+    const rows = (data as Array<{
+      ok: boolean;
+      status_code: number;
+      message: string;
+      skills: unknown;
+      skill_ids: unknown;
+    }> | null) ?? [];
+    const result = rows[0];
+    if (!result) {
+      return NextResponse.json({ error: "Failed to update skills." }, { status: 500 });
     }
 
-    if (dedupedSkillIds.length > 0) {
-      const payload: TablesInsert<"freelancer_skill">[] = dedupedSkillIds.map((skillId) => ({
-        freelancer_id: userId,
-        skill_id: skillId,
-      }));
-
-      const { error: insertError } = await supabaseServer.from("freelancer_skill").insert(payload);
-      if (insertError) {
-        return NextResponse.json({ error: insertError.message }, { status: 500 });
-      }
+    if (!result.ok) {
+      return NextResponse.json({ error: result.message }, { status: result.status_code });
     }
 
-    const result = await fetchFreelancerSkills(userId);
-    if (result.error) {
-      return NextResponse.json({ error: result.error }, { status: 500 });
-    }
+    const skills = Array.isArray(result.skills) ? result.skills : [];
+    const skillIds = Array.isArray(result.skill_ids) ? result.skill_ids : [];
 
-    return NextResponse.json({ skills: result.skills, skillIds: result.skillIds }, { status: 200 });
+    return NextResponse.json({ skills, skillIds }, { status: 200 });
   } catch (error: unknown) {
     return NextResponse.json({ error: resolveApiErrorMessage(error) }, { status: 500 });
   }
